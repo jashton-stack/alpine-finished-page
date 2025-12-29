@@ -1,3 +1,4 @@
+// src/App.tsx
 import React, { useMemo, useRef, useState, useEffect } from "react";
 import { setThemeFromQuery } from "./theme";
 
@@ -30,9 +31,7 @@ type FieldKey =
   | "fact_avg_monthly_invoiced" | "fact_customer_types" | "fact_payment_terms" | "fact_concentration" | "fact_past_due_or_disputed" | "fact_recent_slowing"
   | "fran_brand" | "fran_stage" | "fran_has_fdd" | "fran_location_status" | "fran_total_project_cost" | "fran_cash_injection" | "fran_other_funding" | "fran_experience"
   | "av_aircraft_type" | "av_txn_type" | "av_intended_use" | "av_base" | "av_annual_hours"
-  | "other_notes"
-  // NEW tracking fields (added, not renamed)
-  | "heard_about" | "heard_about_other";
+  | "other_notes";
 
 type PropertyKey =
   | "property_address" | "property_type" | "structure_size" | "year_built_condition"
@@ -64,8 +63,6 @@ const universalFields: FieldKey[] = [
   "year_business_started","industry","business_description","owners_list",
   "amount_requested","use_of_funds","ideal_timing","estimated_credit_word",
   "revenue_last_year","revenue_ytd","profitability","existing_debt_summary",
-  // new tracking (simple to map in Zap 1 + Sheet later)
-  "heard_about","heard_about_other",
 ];
 
 const fieldsByType: Record<LoanCode, FieldKey[]> = {
@@ -139,8 +136,6 @@ const LABELS: Partial<Record<FieldKey | PropertyKey, string>> = {
   av_aircraft_type:"Aircraft make/model/year (airframe/engine hours if known)", av_txn_type:"Transaction type (purchase/refi)",
   av_intended_use:"Intended use (personal/business/charter/mixed)", av_base:"Home base airport", av_annual_hours:"Expected annual flight hours",
   other_notes:"Notes about your request (anything else we should know)",
-  // new
-  heard_about:"How did you hear about us?", heard_about_other:"Please specify (Other)",
 };
 
 const ALL_DOCS: DocInput[] = [
@@ -183,10 +178,6 @@ function uuid(): string {
 const PrettyField: React.FC<{ name: FieldKey }> = ({ name }) => {
   const label = LABELS[name] ?? name;
   const isTextArea = ["business_description","other_notes","renovation_scope"].includes(name);
-
-  // Special handling for heard_about / heard_about_other in main form block
-  if (name === "heard_about" || name === "heard_about_other") return null;
-
   return (
     <div className="span-6">
       <label>{label}</label>
@@ -223,9 +214,6 @@ const App: React.FC = () => {
   const [leadId, setLeadId] = useState("");
   const [createdAt, setCreatedAt] = useState("");
 
-  const [heardAbout, setHeardAbout] = useState<""|"Andrew"|"Marty"|"Facebook"|"Other">("");
-  const [heardAboutOther, setHeardAboutOther] = useState("");
-
   const formZap1Ref = useRef<HTMLFormElement>(null);
   const formZap2Ref = useRef<HTMLFormElement>(null);
   const zap2SubmittedRef = useRef(false);
@@ -234,10 +222,10 @@ const App: React.FC = () => {
   const visibleFields = useMemo<FieldKey[]>(() => {
     const code = loan?.code as LoanCode | undefined;
     const specific = code ? fieldsByType[code] : [];
-    // universal fields already include heard_about keys, but we handle the UI custom below.
     return hasMulti ? [...universalFields] : [...universalFields, ...specific];
   }, [loan?.code, hasMulti]);
 
+  // Use this so it's not an unused local
   const visibleDocs = useMemo<DocInput[]>(() => {
     const code = loan?.code as LoanCode | undefined;
     if (!code) return [];
@@ -294,8 +282,6 @@ const App: React.FC = () => {
     ensureHidden(formZap1Ref.current, "has_multiple_properties", String(multiActive));
     ensureHidden(formZap1Ref.current, "properties_count", String(items.length));
     ensureHidden(formZap1Ref.current, "properties_json", propertiesJson);
-    ensureHidden(formZap1Ref.current, "heard_about", heardAbout);
-    ensureHidden(formZap1Ref.current, "heard_about_other", heardAbout === "Other" ? heardAboutOther : "");
 
     // Zap 2 fields
     ensureHidden(formZap2Ref.current, "lead_id", meta.lead_id);
@@ -311,8 +297,6 @@ const App: React.FC = () => {
       u.searchParams.set("loan_type_label", loan.label);
       u.searchParams.set("has_multiple_properties", String(multiActive));
       u.searchParams.set("properties_count", String(items.length));
-      u.searchParams.set("heard_about", heardAbout);
-      u.searchParams.set("heard_about_other", heardAbout === "Other" ? heardAboutOther : "");
       formZap1Ref.current.action = u.toString();
     }
     if (formZap2Ref.current){
@@ -412,37 +396,7 @@ const App: React.FC = () => {
           <input type="hidden" name="has_multiple_properties" value={String(hasMulti)} />
           <input type="hidden" name="properties_count" value={String(properties.length)} />
           <input type="hidden" name="properties_json" value="" />
-          <input type="hidden" name="heard_about" value={heardAbout} />
-          <input type="hidden" name="heard_about_other" value={heardAbout === "Other" ? heardAboutOther : ""} />
-
-          {/* Contact / Business / Financials */}
           {visibleFields.map((k) => <PrettyField key={k} name={k} />)}
-
-          {/* How did you hear about us? (custom UI, posted via hidden inputs above) */}
-          <div className="span-6">
-            <label>{LABELS.heard_about}</label>
-            <select
-              value={heardAbout}
-              onChange={(e)=> setHeardAbout(e.target.value as any)}
-            >
-              <option value="" disabled>Select an option…</option>
-              <option value="Andrew">Andrew</option>
-              <option value="Marty">Marty</option>
-              <option value="Facebook">Facebook</option>
-              <option value="Other">Other</option>
-            </select>
-            <div className="help">This helps us route your request to the right owner.</div>
-          </div>
-          {heardAbout === "Other" && (
-            <div className="span-6">
-              <label>{LABELS.heard_about_other}</label>
-              <input
-                value={heardAboutOther}
-                onChange={(e)=> setHeardAboutOther(e.target.value)}
-                placeholder="e.g., Google, Referral, YouTube, etc."
-              />
-            </div>
-          )}
         </div>
       </form>
 
@@ -487,16 +441,17 @@ const App: React.FC = () => {
             <input type="hidden" name="loan_type" value={loan_type} />
             <input type="hidden" name="loan_type_label" value={loan_type_label} />
 
-            {(docsByType[loan.code] || []).map(name => {
-              const meta = ALL_DOCS.find(d=>d.name===name)!;
-              return (
-                <div key={name} className="span-6">
-                  <label>{meta.label}</label>
-                  <input type="file" name={name} {...(meta.multiple ? { multiple:true } : {})}
-                         accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,image/*" />
-                </div>
-              );
-            })}
+            {visibleDocs.map((meta) => (
+              <div key={meta.name} className="span-6">
+                <label>{meta.label}</label>
+                <input
+                  type="file"
+                  name={meta.name}
+                  {...(meta.multiple ? { multiple: true } : {})}
+                  accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,image/*"
+                />
+              </div>
+            ))}
           </div>
         </form>
       )}
