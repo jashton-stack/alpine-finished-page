@@ -31,7 +31,8 @@ type FieldKey =
   | "fact_avg_monthly_invoiced" | "fact_customer_types" | "fact_payment_terms" | "fact_concentration" | "fact_past_due_or_disputed" | "fact_recent_slowing"
   | "fran_brand" | "fran_stage" | "fran_has_fdd" | "fran_location_status" | "fran_total_project_cost" | "fran_cash_injection" | "fran_other_funding" | "fran_experience"
   | "av_aircraft_type" | "av_txn_type" | "av_intended_use" | "av_base" | "av_annual_hours"
-  | "other_notes";
+  | "other_notes"
+  | "heard_about" | "heard_about_other";
 
 type PropertyKey =
   | "property_address" | "property_type" | "structure_size" | "year_built_condition"
@@ -63,6 +64,7 @@ const universalFields: FieldKey[] = [
   "year_business_started","industry","business_description","owners_list",
   "amount_requested","use_of_funds","ideal_timing","estimated_credit_word",
   "revenue_last_year","revenue_ytd","profitability","existing_debt_summary",
+  "heard_about","heard_about_other",
 ];
 
 const fieldsByType: Record<LoanCode, FieldKey[]> = {
@@ -136,6 +138,8 @@ const LABELS: Partial<Record<FieldKey | PropertyKey, string>> = {
   av_aircraft_type:"Aircraft make/model/year (airframe/engine hours if known)", av_txn_type:"Transaction type (purchase/refi)",
   av_intended_use:"Intended use (personal/business/charter/mixed)", av_base:"Home base airport", av_annual_hours:"Expected annual flight hours",
   other_notes:"Notes about your request (anything else we should know)",
+  heard_about:"How did you hear about us?",
+  heard_about_other:"If Other, please specify",
 };
 
 const ALL_DOCS: DocInput[] = [
@@ -175,8 +179,90 @@ function uuid(): string {
   return Date.now() + "-" + s() + s();
 }
 
+// ---- Helpers: properties text block + UTF-8 safe base64 ----
+function buildPropertiesTextBlock(loanCode: LoanCode | "", props: Property[]): string {
+  if (!props.length) return "";
+  const lines: string[] = [];
+  lines.push("Collateral / Property Information:");
+  props.forEach((p, i) => {
+    const n = i + 1;
+    const sec: string[] = [];
+    sec.push(`• Property #${n}`);
+    if (p.property_address)       sec.push(`   - Property Address: ${p.property_address}`);
+    if (p.property_type)          sec.push(`   - Property Type: ${p.property_type}`);
+    if (p.structure_size)         sec.push(`   - Square Footage / Units / Beds: ${p.structure_size}`);
+    if (p.year_built_condition)   sec.push(`   - Year Built / Condition: ${p.year_built_condition}`);
+    if (p.purchase_price)         sec.push(`   - Purchase Price (USD): ${p.purchase_price}`);
+    if (p.current_value)          sec.push(`   - Current Value (USD): ${p.current_value}`);
+    if (p.renovation_scope)       sec.push(`   - Renovation Scope: ${p.renovation_scope}`);
+    if (p.capex_budget)           sec.push(`   - CapEx Budget (USD): ${p.capex_budget}`);
+    if (p.occupancy_status)       sec.push(`   - Occupancy Status: ${p.occupancy_status}`);
+    if (p.occupancy_pct)          sec.push(`   - Occupancy Percentage (%): ${p.occupancy_pct}`);
+    if (p.current_management)     sec.push(`   - Current Management: ${p.current_management}`);
+    if (p.current_noi)            sec.push(`   - Current NOI (annual, USD): ${p.current_noi}`);
+    if (p.t12_noi)                sec.push(`   - T12 NOI (annual, USD): ${p.t12_noi}`);
+    if (p.gross_monthly_rent)     sec.push(`   - Gross Monthly Rent (USD): ${p.gross_monthly_rent}`);
+    if (p.vacancy_pct)            sec.push(`   - Vacancy Percentage (%): ${p.vacancy_pct}`);
+    if (p.projected_noi)          sec.push(`   - Projected NOI (annual, USD): ${p.projected_noi}`);
+    if (p.stabilized_dscr)        sec.push(`   - Stabilized DSCR (if known): ${p.stabilized_dscr}`);
+    if (loanCode === "DSCR") {
+      if (p.dscr_annual_taxes)     sec.push(`   - Annual Property Taxes (USD): ${p.dscr_annual_taxes}`);
+      if (p.dscr_annual_insurance) sec.push(`   - Annual Insurance (USD): ${p.dscr_annual_insurance}`);
+      if (p.dscr_recurring_fees)   sec.push(`   - Recurring Fees (USD): ${p.dscr_recurring_fees}`);
+    }
+    if (loanCode === "BRIDGE") {
+      if (p.bridge_arv)            sec.push(`   - Estimated ARV (USD): ${p.bridge_arv}`);
+      if (p.bridge_timeline)       sec.push(`   - Timeline: ${p.bridge_timeline}`);
+      if (p.bridge_exit_strategy)  sec.push(`   - Exit Strategy: ${p.bridge_exit_strategy}`);
+    }
+    lines.push(sec.join("\n"));
+  });
+  lines.push(""); // trailing newline
+  return lines.join("\n");
+}
+
+// UTF-8 safe base64 (btoa/atob choke on non-ASCII)
+function toBase64Utf8(input: string): string {
+  return btoa(unescape(encodeURIComponent(input)));
+}
+
+// Remove duplicates and set a hidden field
+function setOrReplaceHidden(form: HTMLFormElement | null, name: string, value: string) {
+  if (!form) return;
+  form.querySelectorAll<HTMLInputElement>(`input[name="${name}"]`).forEach(el => el.remove());
+  const el = document.createElement("input");
+  el.type = "hidden";
+  el.name = name;
+  el.value = value;
+  form.appendChild(el);
+}
+
 const PrettyField: React.FC<{ name: FieldKey }> = ({ name }) => {
   const label = LABELS[name] ?? name;
+
+  if (name === "heard_about") {
+    return (
+      <div className="span-6">
+        <label>{label}</label>
+        <select name="heard_about" defaultValue="">
+          <option value="" disabled>Select…</option>
+          <option value="Andrew">Andrew</option>
+          <option value="Marty">Marty</option>
+          <option value="Facebook">Facebook</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+    );
+  }
+  if (name === "heard_about_other") {
+    return (
+      <div className="span-6">
+        <label>{label}</label>
+        <input name="heard_about_other" placeholder="If you chose 'Other', add detail" />
+      </div>
+    );
+  }
+
   const isTextArea = ["business_description","other_notes","renovation_scope"].includes(name);
   return (
     <div className="span-6">
@@ -225,7 +311,6 @@ const App: React.FC = () => {
     return hasMulti ? [...universalFields] : [...universalFields, ...specific];
   }, [loan?.code, hasMulti]);
 
-  // Use this so it's not an unused local
   const visibleDocs = useMemo<DocInput[]>(() => {
     const code = loan?.code as LoanCode | undefined;
     if (!code) return [];
@@ -247,13 +332,6 @@ const App: React.FC = () => {
     setProperties(prev => { const c=[...prev]; c[idx] = { ...c[idx], [key]: val }; return c; });
   }
 
-  function ensureHidden(form: HTMLFormElement | null, name: string, value: string) {
-    if (!form) return;
-    let el = form.querySelector<HTMLInputElement>(`input[name="${name}"]`);
-    if (!el) { el = document.createElement("input"); el.type="hidden"; el.name=name; form.appendChild(el); }
-    el.value = value;
-  }
-
   function submitZap2Once(){
     if (zap2SubmittedRef.current) return;
     zap2SubmittedRef.current = true;
@@ -269,34 +347,48 @@ const App: React.FC = () => {
     const meta = { lead_id: "lead_" + uuid(), created_at: new Date().toISOString() };
     setLeadId(meta.lead_id); setCreatedAt(meta.created_at);
 
-    const items = multiActive ? properties : [];
-    const propertiesJson = JSON.stringify({ loan_type: loan.code, count: items.length, items });
+    // Build SINGLE TEXT BLOCK for properties_json, then base64 it
+    const propsText = multiActive ? buildPropertiesTextBlock(loan.code, properties) : "";
+    const propsTextB64 = toBase64Utf8(propsText);
 
-    // Zap 1 fields
-    ensureHidden(formZap1Ref.current, "lead_id", meta.lead_id);
-    ensureHidden(formZap1Ref.current, "created_at", meta.created_at);
-    ensureHidden(formZap1Ref.current, "loan_type", loan.code);
-    ensureHidden(formZap1Ref.current, "loan_type_label", loan.label);
-    ensureHidden(formZap1Ref.current, "status", "awaiting_owner_approval");
-    ensureHidden(formZap1Ref.current, "owner_email", "jashton@ashtonaisolutions.com");
-    ensureHidden(formZap1Ref.current, "has_multiple_properties", String(multiActive));
-    ensureHidden(formZap1Ref.current, "properties_count", String(items.length));
-    ensureHidden(formZap1Ref.current, "properties_json", propertiesJson);
+    // Zap 1 fields (set/replace to avoid duplicates)
+    setOrReplaceHidden(formZap1Ref.current, "lead_id", meta.lead_id);
+    setOrReplaceHidden(formZap1Ref.current, "created_at", meta.created_at);
+    setOrReplaceHidden(formZap1Ref.current, "loan_type", loan.code);
+    setOrReplaceHidden(formZap1Ref.current, "loan_type_label", loan.label);
+    setOrReplaceHidden(formZap1Ref.current, "status", "awaiting_owner_approval");
+    setOrReplaceHidden(formZap1Ref.current, "owner_email", "jashton@ashtonaisolutions.com");
+
+    // Lead source (from UI)
+    const heardAboutSel = formZap1Ref.current?.querySelector<HTMLSelectElement>('select[name="heard_about"]');
+    const heardAboutOtherInput = formZap1Ref.current?.querySelector<HTMLInputElement>('input[name="heard_about_other"]');
+    setOrReplaceHidden(formZap1Ref.current, "heard_about", heardAboutSel?.value || "");
+    setOrReplaceHidden(formZap1Ref.current, "heard_about_other", heardAboutOtherInput?.value || "");
+
+    // Multi flags + SINGLE base64 TEXT in properties_json
+    setOrReplaceHidden(formZap1Ref.current, "has_multiple_properties", String(multiActive));
+    setOrReplaceHidden(formZap1Ref.current, "properties_count", String(multiActive ? properties.length : 0));
+    setOrReplaceHidden(formZap1Ref.current, "properties_json", propsTextB64);
 
     // Zap 2 fields
-    ensureHidden(formZap2Ref.current, "lead_id", meta.lead_id);
-    ensureHidden(formZap2Ref.current, "loan_type", loan.code);
-    ensureHidden(formZap2Ref.current, "loan_type_label", loan.label);
+    setOrReplaceHidden(formZap2Ref.current, "lead_id", meta.lead_id);
+    setOrReplaceHidden(formZap2Ref.current, "loan_type", loan.code);
+    setOrReplaceHidden(formZap2Ref.current, "loan_type_label", loan.label);
 
-    // Querystring backup
+    // Querystring backup (plain base64 string only)
     if (formZap1Ref.current){
       const u = new URL(formZap1Ref.current.action);
       u.searchParams.set("lead_id", meta.lead_id);
       u.searchParams.set("created_at", meta.created_at);
       u.searchParams.set("loan_type", loan.code);
       u.searchParams.set("loan_type_label", loan.label);
+      u.searchParams.set("status", "awaiting_owner_approval");
+      u.searchParams.set("owner_email", "jashton@ashtonaisolutions.com");
       u.searchParams.set("has_multiple_properties", String(multiActive));
-      u.searchParams.set("properties_count", String(items.length));
+      u.searchParams.set("properties_count", String(multiActive ? properties.length : 0));
+      u.searchParams.set("properties_json", propsTextB64);
+      u.searchParams.set("heard_about", heardAboutSel?.value || "");
+      u.searchParams.set("heard_about_other", heardAboutOtherInput?.value || "");
       formZap1Ref.current.action = u.toString();
     }
     if (formZap2Ref.current){
@@ -395,7 +487,7 @@ const App: React.FC = () => {
           <input type="hidden" name="owner_email" value="jashton@ashtonaisolutions.com" />
           <input type="hidden" name="has_multiple_properties" value={String(hasMulti)} />
           <input type="hidden" name="properties_count" value={String(properties.length)} />
-          <input type="hidden" name="properties_json" value="" />
+          {/* properties_json is injected dynamically with base64 value */}
           {visibleFields.map((k) => <PrettyField key={k} name={k} />)}
         </div>
       </form>
