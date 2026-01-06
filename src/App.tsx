@@ -236,6 +236,27 @@ function setOrReplaceHidden(form: HTMLFormElement | null, name: string, value: s
   form.appendChild(el);
 }
 
+// Validate all file inputs: only PDF and <= 9.5 MB per file
+function validateZap2Files(form: HTMLFormElement | null): { ok: boolean; message?: string } {
+  if (!form) return { ok: true };
+  const inputs = Array.from(form.querySelectorAll<HTMLInputElement>('input[type="file"]'));
+  const maxBytes = 9.5 * 1024 * 1024; // practical limit ~10MB
+  for (const inp of inputs) {
+    const files = inp.files;
+    if (!files || files.length === 0) continue; // optional uploads are fine
+    for (const f of Array.from(files)) {
+      const isPdf = f.type === "application/pdf" || /\.pdf$/i.test(f.name || "");
+      if (!isPdf) {
+        return { ok: false, message: `Unsupported file type: ${f.name}. Please upload PDF files only.` };
+      }
+      if (f.size > maxBytes) {
+        return { ok: false, message: `File too large: ${f.name}. Please keep each file ≤ 9.5 MB.` };
+      }
+    }
+  }
+  return { ok: true };
+}
+
 const PrettyField: React.FC<{ name: FieldKey }> = ({ name }) => {
   const label = LABELS[name] ?? name;
 
@@ -344,6 +365,13 @@ const App: React.FC = () => {
   function onSubmit(e?: React.FormEvent){
     if (e) e.preventDefault();
     if (!loan) { setStatus("Please select a loan type before submitting."); return; }
+
+    // Validate files before any submit
+    const fileCheck = validateZap2Files(formZap2Ref.current);
+    if (!fileCheck.ok) {
+      setStatus(fileCheck.message || "One or more files are invalid.");
+      return;
+    }
 
     // hard guard: ignore any subsequent attempts
     if (submittedRef.current || isSubmitting) return;
@@ -558,6 +586,10 @@ const App: React.FC = () => {
             <input type="hidden" name="loan_type" value={loan_type} />
             <input type="hidden" name="loan_type_label" value={loan_type_label} />
 
+            <div className="span-12 help" style={{marginBottom:8}}>
+              PDFs only. Max ~9.5 MB per file.
+            </div>
+
             {visibleDocs.map((meta) => (
               <div key={meta.name} className="span-6">
                 <label>{meta.label}</label>
@@ -565,7 +597,7 @@ const App: React.FC = () => {
                   type="file"
                   name={meta.name}
                   {...(meta.multiple ? { multiple: true } : {})}
-                  accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,image/*"
+                  accept=".pdf,application/pdf"
                   disabled={isSubmitted || isSubmitting}
                 />
               </div>
@@ -603,3 +635,4 @@ const App: React.FC = () => {
 };
 
 export default App;
+
