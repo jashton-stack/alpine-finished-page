@@ -221,7 +221,6 @@ function buildPropertiesTextBlock(loanCode: LoanCode | "", props: Property[]): s
   return lines.join("\n");
 }
 
-// UTF-8 safe base64 (btoa/atob choke on non-ASCII)
 function toBase64Utf8(input: string): string {
   return btoa(unescape(encodeURIComponent(input)));
 }
@@ -300,6 +299,10 @@ const App: React.FC = () => {
   const [leadId, setLeadId] = useState("");
   const [createdAt, setCreatedAt] = useState("");
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
+  const submittedRef = useRef(false); // hard one-shot guard
+
   const formZap1Ref = useRef<HTMLFormElement>(null);
   const formZap2Ref = useRef<HTMLFormElement>(null);
   const zap2SubmittedRef = useRef(false);
@@ -335,13 +338,17 @@ const App: React.FC = () => {
   function submitZap2Once(){
     if (zap2SubmittedRef.current) return;
     zap2SubmittedRef.current = true;
-    setStatus("Uploading documents to Zap 2…");
     formZap2Ref.current?.submit();
   }
 
   function onSubmit(e?: React.FormEvent){
     if (e) e.preventDefault();
     if (!loan) { setStatus("Please select a loan type before submitting."); return; }
+
+    // hard guard: ignore any subsequent attempts
+    if (submittedRef.current || isSubmitting) return;
+    submittedRef.current = true;
+    setIsSubmitting(true);
 
     const multiActive = hasMulti && MULTI_SUPPORTED.includes(loan.code);
     const meta = { lead_id: "lead_" + uuid(), created_at: new Date().toISOString() };
@@ -399,12 +406,14 @@ const App: React.FC = () => {
       formZap2Ref.current.action = u2.toString();
     }
 
+    setStatus("Submitting… please wait.");
     zap2SubmittedRef.current = false;
     if (zap2FallbackRef.current){ clearTimeout(zap2FallbackRef.current); zap2FallbackRef.current = null; }
 
-    setStatus("Sending application details to Zap 1…");
+    // Submit Zap 1 (text)
     formZap1Ref.current?.submit();
 
+    // Submit Zap 2 (files) either on iframe load or fallback
     zap2FallbackRef.current = window.setTimeout(() => { submitZap2Once(); }, 1200);
   }
 
@@ -412,10 +421,22 @@ const App: React.FC = () => {
     const i1 = document.getElementById("zap1Target") as HTMLIFrameElement | null;
     const i2 = document.getElementById("zap2Target") as HTMLIFrameElement | null;
     if (!i1 || !i2) return;
+
     const onLoad1 = () => submitZap2Once();
-    const onLoad2 = () => { setStatus("Done. Check Zap runs for results."); if (zap2FallbackRef.current){ clearTimeout(zap2FallbackRef.current); zap2FallbackRef.current = null; } };
-    i1.addEventListener("load", onLoad1); i2.addEventListener("load", onLoad2);
-    return () => { i1.removeEventListener("load", onLoad1); i2.removeEventListener("load", onLoad2); };
+    const onLoad2 = () => {
+      // When Zap 2 finishes loading, mark fully submitted and update UI
+      setIsSubmitting(false);
+      setIsSubmitted(true);
+      setStatus("Your form has been submitted for review, we will send an update shortly.");
+      if (zap2FallbackRef.current){ clearTimeout(zap2FallbackRef.current); zap2FallbackRef.current = null; }
+    };
+
+    i1.addEventListener("load", onLoad1);
+    i2.addEventListener("load", onLoad2);
+    return () => {
+      i1.removeEventListener("load", onLoad1);
+      i2.removeEventListener("load", onLoad2);
+    };
   }, []);
 
   const loan_type = loan?.code ?? "";
@@ -439,7 +460,7 @@ const App: React.FC = () => {
         <div className="grid">
           <div className="span-6">
             <label>Loan Type</label>
-            <select value={loan?.code ?? ""} onChange={onLoanChange}>
+            <select value={loan?.code ?? ""} onChange={onLoanChange} disabled={isSubmitted || isSubmitting}>
               <option value="" disabled>Select a loan type…</option>
               {LOAN_TYPES.map(o => <option key={o.code} value={o.code}>{o.label} ({o.code})</option>)}
             </select>
@@ -459,6 +480,7 @@ const App: React.FC = () => {
                   if (v && properties.length === 0) setProperties([{id:"prop_"+uuid()},{id:"prop_"+uuid()}]);
                   if (!v) setProperties([]);
                 }}
+                disabled={isSubmitted || isSubmitting}
               >
                 <option value="no">No</option>
                 <option value="yes">Yes</option>
@@ -477,6 +499,7 @@ const App: React.FC = () => {
         target="zap1Target"
         encType="application/x-www-form-urlencoded"
         onSubmit={(e)=>e.preventDefault()}
+        style={isSubmitted ? { opacity: 0.7, pointerEvents: "none" } : {}}
       >
         <div className="grid">
           <input type="hidden" name="loan_type" value={loan_type} />
@@ -487,13 +510,14 @@ const App: React.FC = () => {
           <input type="hidden" name="owner_email" value="jashton@ashtonaisolutions.com" />
           <input type="hidden" name="has_multiple_properties" value={String(hasMulti)} />
           <input type="hidden" name="properties_count" value={String(properties.length)} />
-          {/* properties_json is injected dynamically with base64 value */}
+          {/* properties_json injected dynamically */}
+
           {visibleFields.map((k) => <PrettyField key={k} name={k} />)}
         </div>
       </form>
 
       {loan && hasMulti && (
-        <div className="card">
+        <div className="card" style={isSubmitted ? { opacity: 0.7, pointerEvents: "none" } : {}}>
           <div className="grid">
             <div className="span-12">
               <div className="h2">Property Details ({properties.length})</div>
@@ -503,7 +527,7 @@ const App: React.FC = () => {
               <div key={p.id} className="span-12" style={{borderTop:"1px solid var(--line)", paddingTop:12, marginTop:12}}>
                 <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8}}>
                   <div className="h3">Property #{idx+1}</div>
-                  <button className="btn" type="button" onClick={()=>removeProperty(idx)}>Remove</button>
+                  <button className="btn" type="button" onClick={()=>removeProperty(idx)} disabled={isSubmitted || isSubmitting}>Remove</button>
                 </div>
                 <div className="grid">
                   {propertyFieldList(loan?.code).map((f) => (
@@ -513,7 +537,7 @@ const App: React.FC = () => {
               </div>
             ))}
             <div className="span-12" style={{display:"flex", gap:12}}>
-              <button className="btn" type="button" onClick={addProperty}>Add Another Property</button>
+              <button className="btn" type="button" onClick={addProperty} disabled={isSubmitted || isSubmitting}>Add Another Property</button>
             </div>
           </div>
         </div>
@@ -527,6 +551,7 @@ const App: React.FC = () => {
           action={ZAP2_URL}
           target="zap2Target"
           encType="multipart/form-data"
+          style={isSubmitted ? { opacity: 0.7, pointerEvents: "none" } : {}}
         >
           <div className="grid">
             <input type="hidden" name="lead_id" value={leadId} />
@@ -541,6 +566,7 @@ const App: React.FC = () => {
                   name={meta.name}
                   {...(meta.multiple ? { multiple: true } : {})}
                   accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,image/*"
+                  disabled={isSubmitted || isSubmitting}
                 />
               </div>
             ))}
@@ -549,10 +575,23 @@ const App: React.FC = () => {
       )}
 
       <div className="card">
-        <div className="btnbar" style={{gap:12, flexWrap:"wrap"}}>
-          <button className="btn primary" onClick={()=>onSubmit()}>Submit Details & Upload Documents</button>
-          <span className="status">{status}</span>
-        </div>
+        {!isSubmitted ? (
+          <div className="btnbar" style={{gap:12, flexWrap:"wrap"}}>
+            <button
+              className="btn primary"
+              onClick={()=>onSubmit()}
+              disabled={isSubmitting}
+              style={isSubmitting ? { opacity:.7, cursor:"not-allowed" } : {}}
+            >
+              {isSubmitting ? "Submitting…" : "Submit Details & Upload Documents"}
+            </button>
+            <span className="status">{status}</span>
+          </div>
+        ) : (
+          <div className="h3" style={{color:"var(--ink)"}}>
+            Your form has been submitted for review, we will send an update shortly.
+          </div>
+        )}
         {leadId && <div className="help" style={{marginTop:6}}>Lead ID for this submission: <strong>{leadId}</strong></div>}
         <div className="help" style={{marginTop:6}}>
           {loan ? (hasMulti ? "Tip: Fill each property block above, attach files, then submit." : "Tip: Attach any available files above before submitting.") :
