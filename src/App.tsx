@@ -46,6 +46,32 @@ type Property = { id: string } & Partial<Record<PropertyKey, string>>;
 
 interface DocInput { name: string; label: string; multiple?: boolean; }
 
+// ---------- File type policy (broad + safe) ----------
+const ALLOWED_EXTENSIONS = [
+  ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt", ".rtf",
+  ".zip",
+  ".tif", ".tiff", ".jpg", ".jpeg", ".png", ".heic"
+];
+
+const ALLOWED_MIME_EXACT = new Set([
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/csv",
+  "text/plain",
+  "application/rtf",
+  "application/zip",
+  "image/tiff", "image/jpeg", "image/png", "image/heic"
+]);
+
+const ACCEPT_STRING = [
+  ".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.rtf,.zip,.tif,.tiff,.jpg,.jpeg,.png,.heic",
+  "image/*" // broad allow for images (covers scanner cases)
+].join(",");
+
+// ---------- App constants ----------
 const LOAN_TYPES: LoanTypeOption[] = [
   { code: "CRE",          label: "Commercial Real Estate" },
   { code: "DSCR",         label: "DSCR / Long-Term Rental" },
@@ -236,25 +262,55 @@ function setOrReplaceHidden(form: HTMLFormElement | null, name: string, value: s
   form.appendChild(el);
 }
 
-// Validate all file inputs: only PDF and <= 9.5 MB per file
+// File validation: allow broad types; ≤ 9.5 MB per file; ≤ 30 MB total.
+// Accept scanners (octet-stream) by trusting extension.
+function hasAllowedExtension(name: string): boolean {
+  const lower = (name || "").toLowerCase();
+  return ALLOWED_EXTENSIONS.some(ext => lower.endsWith(ext));
+}
+function isAllowedFile(file: File): boolean {
+  if (ALLOWED_MIME_EXACT.has(file.type)) return true;
+  if (/^image\//i.test(file.type)) return true;
+  if (file.type === "application/octet-stream" && hasAllowedExtension(file.name)) return true;
+  // Fall back to extension
+  return hasAllowedExtension(file.name);
+}
 function validateZap2Files(form: HTMLFormElement | null): { ok: boolean; message?: string } {
   if (!form) return { ok: true };
   const inputs = Array.from(form.querySelectorAll<HTMLInputElement>('input[type="file"]'));
-  const maxBytes = 9.5 * 1024 * 1024; // practical limit ~10MB
+  const maxBytesPerFile = 9.5 * 1024 * 1024; // ~10MB practical webhook limit
+  const maxBytesTotal = 30 * 1024 * 1024;    // ~30MB total request guidance
+  let total = 0;
   for (const inp of inputs) {
     const files = inp.files;
-    if (!files || files.length === 0) continue; // optional uploads are fine
+    if (!files || files.length === 0) continue; // optional
     for (const f of Array.from(files)) {
-      const isPdf = f.type === "application/pdf" || /\.pdf$/i.test(f.name || "");
-      if (!isPdf) {
-        return { ok: false, message: `Unsupported file type: ${f.name}. Please upload PDF files only.` };
+      if (!isAllowedFile(f)) {
+        return { ok: false, message: `Unsupported file type: ${f.name}. Allowed: ${ALLOWED_EXTENSIONS.join(", ")} and common images.` };
       }
-      if (f.size > maxBytes) {
+      if (f.size > maxBytesPerFile) {
         return { ok: false, message: `File too large: ${f.name}. Please keep each file ≤ 9.5 MB.` };
+      }
+      total += f.size;
+      if (total > maxBytesTotal) {
+        return { ok: false, message: `Total upload size too large. Please keep all files combined ≤ 30 MB.` };
       }
     }
   }
   return { ok: true };
+}
+
+// Debug echo for Zap 2 trigger
+function captureFilesManifest(form: HTMLFormElement | null): string {
+  if (!form) return "";
+  const rows: string[] = [];
+  const inputs = Array.from(form.querySelectorAll<HTMLInputElement>('input[type="file"]'));
+  for (const inp of inputs) {
+    const key = inp.name;
+    const files = inp.files ? Array.from(inp.files).map(f => f.name) : [];
+    if (files.length) rows.push(`${key}: ${files.join(", ")}`);
+  }
+  return rows.join(" | ");
 }
 
 const PrettyField: React.FC<{ name: FieldKey }> = ({ name }) => {
@@ -359,6 +415,9 @@ const App: React.FC = () => {
   function submitZap2Once(){
     if (zap2SubmittedRef.current) return;
     zap2SubmittedRef.current = true;
+    // Inject debug files manifest before submit
+    const manifest = captureFilesManifest(formZap2Ref.current);
+    setOrReplaceHidden(formZap2Ref.current, "files_manifest", manifest);
     formZap2Ref.current?.submit();
   }
 
@@ -410,7 +469,7 @@ const App: React.FC = () => {
     setOrReplaceHidden(formZap2Ref.current, "loan_type", loan.code);
     setOrReplaceHidden(formZap2Ref.current, "loan_type_label", loan.label);
 
-    // Querystring backup (plain base64 string only)
+    // Querystring backup
     if (formZap1Ref.current){
       const u = new URL(formZap1Ref.current.action);
       u.searchParams.set("lead_id", meta.lead_id);
@@ -587,7 +646,7 @@ const App: React.FC = () => {
             <input type="hidden" name="loan_type_label" value={loan_type_label} />
 
             <div className="span-12 help" style={{marginBottom:8}}>
-              PDFs only. Max ~9.5 MB per file.
+              Supported: PDF, Word, Excel, CSV/TXT/RTF, ZIP, common images (JPEG/PNG/TIFF/HEIC). Per file ≤ 9.5 MB; total ≤ 30 MB.
             </div>
 
             {visibleDocs.map((meta) => (
@@ -597,7 +656,7 @@ const App: React.FC = () => {
                   type="file"
                   name={meta.name}
                   {...(meta.multiple ? { multiple: true } : {})}
-                  accept=".pdf,application/pdf"
+                  accept={ACCEPT_STRING}
                   disabled={isSubmitted || isSubmitting}
                 />
               </div>
@@ -635,4 +694,3 @@ const App: React.FC = () => {
 };
 
 export default App;
-
