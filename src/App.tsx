@@ -264,7 +264,6 @@ function setOrReplaceHidden(form: HTMLFormElement | null, name: string, value: s
 }
 
 // File validation: allow broad types; ≤ 9.5 MB per file; ≤ 30 MB total.
-// Accept scanners (octet-stream) by trusting extension.
 function hasAllowedExtension(name: string): boolean {
   const lower = (name || "").toLowerCase();
   return ALLOWED_EXTENSIONS.some(ext => lower.endsWith(ext));
@@ -278,12 +277,12 @@ function isAllowedFile(file: File): boolean {
 function validateZap2Files(form: HTMLFormElement | null): { ok: boolean; message?: string } {
   if (!form) return { ok: true };
   const inputs = Array.from(form.querySelectorAll<HTMLInputElement>('input[type="file"]'));
-  const maxBytesPerFile = 9.5 * 1024 * 1024; // ~10MB practical webhook limit
-  const maxBytesTotal = 30 * 1024 * 1024;    // ~30MB total request guidance
+  const maxBytesPerFile = 9.5 * 1024 * 1024;
+  const maxBytesTotal = 30 * 1024 * 1024;
   let total = 0;
   for (const inp of inputs) {
     const files = inp.files;
-    if (!files || files.length === 0) continue; // optional
+    if (!files || files.length === 0) continue;
     for (const f of Array.from(files)) {
       if (!isAllowedFile(f)) {
         return { ok: false, message: `Unsupported file type: ${f.name}. Allowed: ${ALLOWED_EXTENSIONS.join(", ")} and common images.` };
@@ -388,7 +387,6 @@ const App: React.FC = () => {
   const visibleFields = useMemo<FieldKey[]>(() => {
     const code = loan?.code as LoanCode | undefined;
     const specific = code ? fieldsByType[code] : [];
-    // heard_about + heard_about_other live in universalFields => always shown
     return hasMulti ? [...universalFields] : [...universalFields, ...specific];
   }, [loan?.code, hasMulti]);
 
@@ -598,7 +596,6 @@ const App: React.FC = () => {
           <input type="hidden" name="has_multiple_properties" value={String(hasMulti)} />
           <input type="hidden" name="properties_count" value={String(properties.length)} />
           {/* properties_json injected dynamically */}
-
           {visibleFields.map((k) => <PrettyField key={k} name={k} />)}
         </div>
       </form>
@@ -657,7 +654,8 @@ const App: React.FC = () => {
                   name={meta.name}
                   {...(meta.multiple ? { multiple: true } : {})}
                   accept={ACCEPT_STRING}
-                  disabled={isSubmitted || isSubmitting}
+                  // IMPORTANT: keep file inputs enabled during submit; only disable after completed
+                  disabled={isSubmitted}
                 />
               </div>
             ))}
