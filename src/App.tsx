@@ -68,7 +68,7 @@ const ALLOWED_MIME_EXACT = new Set([
 
 const ACCEPT_STRING = [
   ".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.rtf,.zip,.tif,.tiff,.jpg,.jpeg,.png,.heic",
-  "image/*" // broad allow for images (covers scanner cases)
+  "image/*"
 ].join(",");
 
 // ---------- App constants ----------
@@ -90,6 +90,7 @@ const universalFields: FieldKey[] = [
   "year_business_started","industry","business_description","owners_list",
   "amount_requested","use_of_funds","ideal_timing","estimated_credit_word",
   "revenue_last_year","revenue_ytd","profitability","existing_debt_summary",
+  // always included for every loan type:
   "heard_about","heard_about_other",
 ];
 
@@ -272,7 +273,6 @@ function isAllowedFile(file: File): boolean {
   if (ALLOWED_MIME_EXACT.has(file.type)) return true;
   if (/^image\//i.test(file.type)) return true;
   if (file.type === "application/octet-stream" && hasAllowedExtension(file.name)) return true;
-  // Fall back to extension
   return hasAllowedExtension(file.name);
 }
 function validateZap2Files(form: HTMLFormElement | null): { ok: boolean; message?: string } {
@@ -388,6 +388,7 @@ const App: React.FC = () => {
   const visibleFields = useMemo<FieldKey[]>(() => {
     const code = loan?.code as LoanCode | undefined;
     const specific = code ? fieldsByType[code] : [];
+    // heard_about + heard_about_other live in universalFields => always shown
     return hasMulti ? [...universalFields] : [...universalFields, ...specific];
   }, [loan?.code, hasMulti]);
 
@@ -511,7 +512,6 @@ const App: React.FC = () => {
 
     const onLoad1 = () => submitZap2Once();
     const onLoad2 = () => {
-      // When Zap 2 finishes loading, mark fully submitted and update UI
       setIsSubmitting(false);
       setIsSubmitted(true);
       setStatus("Your form has been submitted for review, we will send an update shortly.");
